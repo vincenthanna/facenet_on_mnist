@@ -177,14 +177,14 @@ def run():
     print(train_images.shape, train_labels.shape)
     print(valid_images.shape, valid_labels.shape)
 
-    gflags.num_category = 10
+    num_category = gflags.num_category = 10
+    batch_size_per_cat = gflags.batch_size_per_cat = 10
 
     train_set = reorganizeMNIST(train_images, train_labels.reshape(-1))
     valid_set = reorganizeMNIST(valid_images, valid_labels.reshape(-1))
 
-    test_batch(train_set, gflags.num_category)
+    test_batch(train_set, num_category)
 
-    gflags.batch_size_per_cat = 10
     gflags.num_batch = int(len(train_set[0]) / batch_size_per_cat)
     gflags.batch_size = batch_size_per_cat * num_category
     print("num_batch =", gflags.num_batch, " batch_size=", gflags.batch_size)
