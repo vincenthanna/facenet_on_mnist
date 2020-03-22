@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: UTF-8 -*-
+
 import sys
 
 import tensorflow as tf
@@ -52,7 +55,7 @@ def embedImages(Images):
 def select_training_triplets_ver1(embeddings, images, labels):
 
     def get_dist(emb1, emb2):
-        x = np.sqrt(np.subtract(emb1, emb2))
+        x = np.sqrt(np.square(np.subtract(emb1, emb2)))
         return np.sum(x, 0)
 
     anchors = np.zeros(images.shape)
@@ -105,7 +108,7 @@ def select_training_triplets_ver1(embeddings, images, labels):
 def select_training_triplets_ver2(embeddings, images, labels):
 
     def get_dist(emb1, emb2):
-        x = np.sqrt(np.subtract(emb1, emb2))
+        x = np.sqrt(np.square(np.subtract(emb1, emb2)))
         return np.sum(x, 0)
 
     ancarr = []
@@ -135,6 +138,11 @@ def select_training_triplets_ver2(embeddings, images, labels):
                         if negative is None:
                             negative = images[ni]
                         dist = get_dist(embedding_positive, embeddings[ni])
+                        """
+                        Select image meet these condition:
+                            - Dist(anchor - negative) is minimal.
+                            - Dist(anchor - negative) is bigger than Dist(anchor - selected positive)
+                        """
                         if dist > ap_dist and dist < an_dist:
                             an_dist = dist
                             negative = images[ni]
@@ -150,7 +158,7 @@ def select_training_triplets_ver2(embeddings, images, labels):
     #print(ancarr.shape, posarr.shape, negarr.shape)
     return ancarr, posarr, negarr
 
-def triplet_loss(anchor, positive, negative):
+def triplet_loss(anchor, positive, negative, alpha):
     with tf.name_scope('triplet_loss'):
         pos_dist = tf.reduce_sum(tf.square(tf.subtract(anchor, positive)), 1)  # Summing over distances in each batch
         neg_dist = tf.reduce_sum(tf.square(tf.subtract(anchor, negative)), 1)
@@ -160,8 +168,9 @@ def triplet_loss(anchor, positive, negative):
 
     return loss
 
-def make_loss_model(images, embed_model):
+def make_loss_model(images, embed_model, alpha):
     anchors, positives, negatives = tf.split(embed_model, 3)
     print(anchors.shape)
-    loss = triplet_loss(anchors, positives, negatives)
+    loss = triplet_loss(anchors, positives, negatives, alpha)
     return loss
+

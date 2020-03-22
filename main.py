@@ -10,6 +10,11 @@ import matplotlib.patheffects as PathEffects
 import seaborn as sns
 
 from tools import *
+from model.simple_nn import *
+
+from sklearn.manifold import TSNE
+
+tf.reset_default_graph()
 
 class FLAGS:
     def __init__(self):
@@ -18,10 +23,28 @@ class FLAGS:
 
 gflags = FLAGS()
 
+# Placeholders for inserting data
+ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
+ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
+lr = tf.Variable(0.001)
+alpha = tf.Variable(0.2)
 
-def train(df, batch_size_per_cat, num_category):
+# make models
+m_embeddings = embedImages(ph_images)
+loss = make_loss_model(ph_images, m_embeddings, alpha)
+optimizer = tf.train.AdamOptimizer(learning_rate=lr)
+train_step = optimizer.minimize(loss=loss)
 
-    run_test = False
+def train(df, batch_size_per_cat, num_category, epochs, num_batch):
+    """train model
+
+    Args:
+
+    Returns:
+
+    Raises:
+        None
+    """    
 
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
@@ -30,8 +53,6 @@ def train(df, batch_size_per_cat, num_category):
             print("Epoch", epoch)
             for batch in range(num_batch):
 
-                # if batch % 10 == 0:
-                #     print("Epoch", epoch, " Batch:", batch)
                 images, labels = get_batch(df, batch_size_per_cat, num_category)
 
                 feed_dict = {ph_images: images, ph_labels: labels}
@@ -40,11 +61,7 @@ def train(df, batch_size_per_cat, num_category):
                 if type(embeddings) == list:
                     embeddings = embeddings[0]
 
-                #print("embeddings.shape=", embeddings.shape)
-                if random.randrange(0, 10) < 7:
-                    select_training_triplets = select_training_triplets_ver1
-                else:
-                    select_training_triplets = select_training_triplets_ver2
+                select_training_triplets = select_training_triplets_ver2                    
 
                 a,p,n = select_training_triplets(embeddings, images, labels)
 
@@ -56,18 +73,15 @@ def train(df, batch_size_per_cat, num_category):
                 _, loss_val, current_lr = sess.run([train_step, loss, optimizer._lr], feed_dict=feed_dict)
                 #print("loss =", loss_val, "lr =", current_lr)
 
-
         # Training is finished, get a batch from training and validation
         # data to visualize the results
-        x_train, y_train = get_batch(train_set, 32)
-        x_val, y_val = get_batch(valid_set, 32)
+        x, y = get_batch(df, 32, num_category)
 
         # Embed the images using the network
-        train_embeds = sess.run(m_embeddings, feed_dict={ph_images: x_train, ph_labels:y_train})
-        val_embeds = sess.run(m_embeddings, feed_dict={ph_images: x_val, ph_labels: y_val})
+        embeds = sess.run(m_embeddings, feed_dict={ph_images: x, ph_labels:y})        
 
         if False:
-            a,p,n = select_training_triplets(train_embeds, x_train, y_train)
+            a,p,n = select_training_triplets(embeds, x, y)
             samplelen = 20
             fig, ax = plt.subplots(3, samplelen, figsize=(32,12))
 
@@ -81,33 +95,31 @@ def train(df, batch_size_per_cat, num_category):
             __show_triplets(ax, 2, n)
             plt.show()
 
+            tsne = TSNE()
+            tsne_train = tsne.fit_transform(embeds)
+            scatter(tsne_train, y, "Results on Data")            
 
-        tsne_train = tsne.fit_transform(train_embeds)
-        tsne_val = tsne.fit_transform(val_embeds)
-
-        scatter(tsne_train, y_train, "Results on Training Data")
-        scatter(tsne_val, y_val, "Results on Validation Data")
-
+        # save model as file
         saver = tf.train.Saver()
         saver.save(sess, './face_model')
 
-    return train_embeds, val_embeds
+    return None
 
 
-def build_facedb(dataset, num_category):
+def build_facedb(dataset, model_embedding, num_category):
+    global gflags
+    sample_cnt_by_category = 100
     with tf.Session() as sess:
         # load model
         saver = tf.train.import_meta_graph('face_model.meta')
-        saver.restore(sess,tf.train.latest_checkpoint('./'))
+        saver.restore(sess, tf.train.latest_checkpoint('./'))
 
         # Training is finished, get a batch from training and validation
         # data to visualize the results
-        x, y = get_batch(dataset, 100)
+        x, y = get_batch(dataset, sample_cnt_by_category, gflags.num_category)
 
         # Embed the images using the network
-        embeds = sess.run(m_embeddings, feed_dict={ph_images: x, ph_labels:y})
-
-        print(embeds.shape, y.shape)
+        embeds = sess.run(model_embedding, feed_dict={ph_images: x, ph_labels:y})        
 
         embed_dict = {new_list : [] for new_list in range(num_category)}
 
@@ -125,7 +137,7 @@ def build_facedb(dataset, num_category):
         return facedb
 
 
-def test(x, y, threshold):
+def test(x, y, threshold, facedb):
     with tf.Session() as sess:
 
         # load model
@@ -141,25 +153,41 @@ def test(x, y, threshold):
 
             dists = []
             for key in facedb:
-                dist = np.linalg.norm(encoding - facedb[key])
-                #print(key, dist)
+                dist = np.linalg.norm(encoding - facedb[key])                
                 dists.append(dist)
             dists = np.array(dists)
-            #print(dists.shape)
             ret = np.argmin(dists)
             retval = dists[ret]
             p = retval / np.sum(dists)
             allp = [p / np.sum(dists) for p in dists]
-            #print(ret, p, y[imgidx], allp)
-            #print(ret, y[imgidx])
             rets.append(ret)
 
         rets = np.array(rets)
         print(rets.shape, y.shape)
         acc = ((rets == y).mean())
-        print("valid accuracy : ", acc)
+        print("Valid accuracy : ", acc)
+
+
+        # show mis-predicted images
+        print("")
+        print("wrong predicted images:")
+        inaccurace_indices = np.nonzero(rets != y)
+        inacc_cnt = inaccurace_indices[0].shape[0]
+        inacc_cnt = min(inacc_cnt, 20)
+        fig, ax = plt.subplots(1, inacc_cnt, figsize=(2 * inacc_cnt, 4)) 
+        for i, idx in enumerate(inaccurace_indices[0]):
+            if i < inacc_cnt:
+                ax[i].imshow(x[idx].reshape(28, 28), cmap=plt.cm.binary)
+                ax[i].set_title(str(rets[idx]))
+                ax[i].tick_params(axis='both', which='both', bottom=False, top=False, labelbottom=False, right=False, left=False, labelleft=False)
+            else:
+                break
+
+        plt.show()
 
 def run():
+    global gflags
+
     sns.set_style('darkgrid')
     sns.set_palette('muted')
     sns.set_context('notebook', font_scale=1.5, rc={"lines.linewidth": 2.5})
@@ -178,17 +206,35 @@ def run():
     print(valid_images.shape, valid_labels.shape)
 
     num_category = gflags.num_category = 10
-    batch_size_per_cat = gflags.batch_size_per_cat = 10
+    batch_size_per_cat = gflags.batch_size_per_cat = 4
 
     train_set = reorganizeMNIST(train_images, train_labels.reshape(-1))
     valid_set = reorganizeMNIST(valid_images, valid_labels.reshape(-1))
 
-    test_batch(train_set, num_category)
+    #test_batch(train_set, num_category)
 
-    gflags.num_batch = int(len(train_set[0]) / batch_size_per_cat)
-    gflags.batch_size = batch_size_per_cat * num_category
+    num_batch = gflags.num_batch = int(len(train_set[0]) / batch_size_per_cat)
+    gflags.batch_size = batch_size_per_cat * num_category 
     print("num_batch =", gflags.num_batch, " batch_size=", gflags.batch_size)
 
+    epochs = 10
+    
+    # Turn on if you want to check code is valid(quick one-time run)
+    if False:
+        epochs = 1
+        num_batch = gflags.num_batch = 2
+
+    # train model and make embeddings with it
+    train(df=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch)
+
+    # make embeddings for each labels
+    facedb = build_facedb(train_set, m_embeddings, num_category)
+    print(facedb)
+
+    # test with valid set.
+    x_val, y_val = get_batch(valid_set, 32, gflags.num_category)
+    test(x_val, y_val, threshold=0.1, facedb=facedb)    
 
 if __name__ == '__main__':
     run()
+
