@@ -1,176 +1,288 @@
-#!/usr/bin/env python
-# -*- coding: UTF-8 -*-
-
 import sys
-
+import os
 import tensorflow as tf
-
-import pandas as pd
-import random
 import numpy as np
+from tensorflow.python.ops import array_ops
+from inspect import currentframe
+
+tf.reset_default_graph()
+
+model_debug = True
 
 
-EMBEDDING_DIM = 4 # Size of the embedding dimension (units in the last layer)
-def embedImages(Images):
-    conv1 = tf.layers.conv2d(Images,
-                             filters=128, kernel_size=(7, 7),
-                             padding='same',
-                             activation=tf.nn.relu,
-                             kernel_initializer=tf.truncated_normal_initializer,
-                             name='conv1')
+def resize(input, size):
+    """add resize-image layer to input
 
-    pool1 = tf.layers.max_pooling2d(conv1,
-                                    pool_size=(2, 2), strides=(2, 2),
-                                    padding='same',
-                                    name='pool1')
+    Args:
+        input: input layer
+        size: size by tuple (width, height)
 
-    conv2 = tf.layers.conv2d(pool1,
-                             filters=256, kernel_size=(5, 5),
-                             padding='same',
-                             activation=tf.nn.relu,
-                             kernel_initializer=tf.truncated_normal_initializer,
-                             name='conv2')
-
-    pool2 = tf.layers.max_pooling2d(conv2,
-                                    pool_size=(2, 2), strides=(2, 2),
-                                    padding='same',
-                                    name='pool2')
-
-    flat = tf.layers.flatten(pool2, name='flatten')
-
-    # Linear activated embeddings
-    embeddings = tf.layers.dense(flat,
-                                 activation=None,
-                                 kernel_initializer=tf.truncated_normal_initializer,
-                                 units=EMBEDDING_DIM,
-                                 name='embeddings')
-
-    embeddings = tf.math.l2_normalize(embeddings, axis=1, epsilon=1e-10, name='embeddings')
-
-    print("embeddings.shape=", embeddings.shape)
-
-    return embeddings
+    Return:
+        layer with resize_images added.
+    """
+    layer = tf.image.resize_images(input, size, method=tf.image.ResizeMethod.BICUBIC, align_corners=True,
+                                   preserve_aspect_ratio=True)
+    return layer
 
 
-def select_training_triplets_ver1(embeddings, images, labels):
+def conv(input, inch, outch, filter_h, filter_w, stride_h, stride_w, padding='SAME', name='conv_layer'):
+    """make conv2d layer with parameters
 
-    def get_dist(emb1, emb2):
-        x = np.sqrt(np.square(np.subtract(emb1, emb2)))
-        return np.sum(x, 0)
+    Args:
+        input: input layer
+        inch: number of input channel
+        outch: number of output channel
+        filter_h: filter height
+        filter_w: filter widht
+        stride_h: stride height
+        stride_w: stride width
+        padding: padding option passing to conv2d()
+        name: name scope string
 
-    anchors = np.zeros(images.shape)
-    positives = np.zeros(images.shape)
-    negatives = np.zeros(images.shape)
-
-    for aidx in range(len(labels)):
-        current_label = labels[aidx]
-
-        # anchor:
-        anchors[aidx] = images[aidx]
-
-        # positive:
-        selected_positive = None
-        ap_dist = 0
-        for i in range(len(labels)):
-            if i != aidx and current_label == labels[i]:
-                if selected_positive is None:
-                    selected_positive = images[i]
-                    ap_dist = get_dist(embeddings[aidx], embeddings[i])
-
-                # get furthest positive
-                dist = get_dist(embeddings[aidx], embeddings[i])
-                if dist > ap_dist:
-                    ap_dist = dist
-                    selected_positive = images[i]
-        positives[aidx] = selected_positive
-
-        # negative:
-        selected_negative = None
-        an_dist = sys.maxsize
-        for i in range(len(labels)):
-            if labels[aidx] != labels[i]:
-                if selected_negative is None:
-                    selected_negative = images[i]
-                    an_dist = get_dist(embeddings[aidx], embeddings[i])
-
-                # get closest negative but smaller than ap diff.
-                dist = get_dist(embeddings[aidx], embeddings[i])
-                #if dist < an_dist and dist > ap_dist:
-                if dist < an_dist:
-                    an_dist = dist
-                    selected_negative = images[i]
-        negatives[aidx] = selected_negative
-
-    return anchors, positives, negatives
+    Return:
+        layer with conv2d added.
+    """
+    with tf.name_scope(name) as scope:
+        layer = tf.layers.conv2d(input, outch, filter_h, strides=(stride_h, stride_w), padding="same",
+                                 activation=tf.nn.relu)
+        return layer
 
 
+def maxpool(input, filter_h, filter_w, stride_h, stride_w, padding, name):
+    """add max pooling layer to input
 
-def select_training_triplets_ver2(embeddings, images, labels):
+    Args:
+        input: input layer
+        filter_h: filter height
+        filter_w: filter widht
+        stride_h: stride height
+        stride_w: stride width
+        padding: padding option passing to conv2d()
+        name: name scope string
 
-    def get_dist(emb1, emb2):
-        x = np.sqrt(np.square(np.subtract(emb1, emb2)))
-        return np.sum(x, 0)
+    Return:
+        layer with max pooling added.
+    """
+    with tf.name_scope(name):
+        mp = tf.nn.max_pool(input, ksize=[1, filter_h, filter_w, 1], strides=[1, stride_h, stride_w, 1],
+                            padding=padding)
+        # print(name + " : ", str(mp.shape))
+        return mp
 
-    ancarr = []
-    posarr = []
-    negarr = []
 
-    for aidx in range(len(labels)):
-        current_label = labels[aidx]
+def avgpool(input, filter_h, filter_w, stride_h, stride_w, padding, name):
+    """add average pooling layer to input
 
-        # anchor:
-        anchor = images[aidx]
+    Args:
+        input: input layer
+        filter_h: filter height
+        filter_w: filter widht
+        stride_h: stride height
+        stride_w: stride width
+        padding: padding option passing to conv2d()
+        name: name scope string
 
-        # positive:
-        selected_positive = None
-        ap_dist = 0
-        for i in range(len(labels)):
-            if i != aidx and current_label == labels[i]:
-                positive = images[i]
-                embedding_positive = embeddings[i]
-                ap_dist = get_dist(embeddings[aidx], embeddings[i])
+    Return:
+        layer with average pooling added.
+    """
+    with tf.name_scope(name):
+        ret = tf.nn.avg_pool(input, ksize=[1, filter_h, filter_w, 1], strides=[1, stride_h, stride_w, 1],
+                             padding=padding)
+        print(name, " : ", str(ret.shape))
+        return ret
 
-                # get negative
-                an_dist = sys.maxsize
-                negative = None
-                for ni in range(len(labels)):
-                    if current_label != labels[ni]:
-                        if negative is None:
-                            negative = images[ni]
-                        dist = get_dist(embedding_positive, embeddings[ni])
-                        """
-                        Select image meet these condition:
-                            - Dist(anchor - negative) is minimal.
-                            - Dist(anchor - negative) is bigger than Dist(anchor - selected positive)
-                        """
-                        if dist > ap_dist and dist < an_dist:
-                            an_dist = dist
-                            negative = images[ni]
 
-                ancarr.append(anchor)
-                posarr.append(positive)
-                negarr.append(negative)
+def l2pool(input, filter_h, filter_w, stride_h, stride_w, padding, name):
+    """add L2 pooling layer to input
+    L2-norm pooling selects average of squared rectangular neighborhood & apply square root.
 
-    ancarr = np.array(ancarr)
-    posarr = np.array(posarr)
-    negarr = np.array(negarr)
+    Args:
+        input: input layer
+        filter_h: filter height
+        filter_w: filter widht
+        stride_h: stride height
+        stride_w: stride width
+        padding: padding option passing to conv2d()
+        name: name scope string
 
-    #print(ancarr.shape, posarr.shape, negarr.shape)
-    return ancarr, posarr, negarr
+    Return:
+        layer with average pooling added.
+    """
+    with tf.name_scope(name):
+        squared = tf.square(input)
+        subsample = tf.nn.avg_pool(squared, ksize=[1, filter_h, filter_w, 1], strides=[1, stride_h, stride_w, 1],
+                                   padding=padding)
+        subsample_sum = tf.multiply(subsample, filter_h * filter_w)
+        return tf.sqrt(subsample_sum)
 
-def triplet_loss(anchor, positive, negative, alpha):
-    with tf.name_scope('triplet_loss'):
-        pos_dist = tf.reduce_sum(tf.square(tf.subtract(anchor, positive)), 1)  # Summing over distances in each batch
-        neg_dist = tf.reduce_sum(tf.square(tf.subtract(anchor, negative)), 1)
 
-        basic_loss = tf.add(tf.subtract(pos_dist, neg_dist), alpha)
-        loss = tf.reduce_mean(tf.maximum(basic_loss, 0.0), 0, name='tripletloss')
+def flatten(input, name):
+    """convert CNN layer to fully-connected layer
 
-    return loss
+    Args:
+        input: input layer
+        name: name scope string
 
-def make_loss_model(images, embed_model, alpha):
-    anchors, positives, negatives = tf.split(embed_model, 3)
-    print(anchors.shape)
-    loss = triplet_loss(anchors, positives, negatives, alpha)
-    return loss
+    Return:
+        layer with flatten layer is attached.
+    """
+    with tf.name_scope(name):
+        l = tf.layers.flatten(input)
+    return l
 
+
+def inception(input_layer, input_size, conv_stride_hw, o1x1, o3x3r, o3x3, o5x5r, o5x5, pooling, pool_filter_size,
+              pool_stride_hw, pool_reduce_outch, name, useOnlyMaxPool=True):
+    """Make GoogLeNet Inception v1 layer
+
+    Args:
+        input_layer: input layer
+        input_size: number of channels of input layer
+        conv_stride_hw: tuple of stride height & width (h, w)
+        o1x1: 1x1 convolution out channel count
+        o3x3r: number of out channel of 1x1 convolution layer ahead of 3x3 convolution layer
+        o3x3: number of out channel of 3x3 convolution layer
+        o5x5r: number of out channel of 1x1 convolution layer ahead of 5x5 convolution layer
+        o5x5: number of out channel of 5x5 convolution layer
+        pooling: pooling method of "3x3 max pooling"
+            Max pooling or L2-norm pooling can be used in "3x3 max pooling" layer
+        pool_filter_size: height & width of filter size of pooling layer
+        pool_stride_hw: stride value of 3x3 max pooling
+        pool_reduce_outch: if not zero, number of out channel of 1x1 convolution ahead of 3x3 max pooling
+        name: name scope string
+        useOnlyMaxPool: use only max pooling(Not using L2-norm pooling)
+
+    Return:
+        layer with inception layer attached.
+
+    """
+    global model_debug
+    debug = model_debug
+    if False:
+        print('name = ', name)
+        print('inputSize = ', input_size)
+        print('kernelSize = {3,5}')
+        print('outputSize = {%d,%d}' % (o3x3, o5x5))
+        print('reduceSize = {%d,%d,%d,%d}' % (o3x3r, o5x5r, pool_reduce_outch, o1x1))
+        print('pooling = {%s, %d, %d, %d, %d}' % (
+        pooling, pool_filter_size, pool_filter_size, pool_stride_hw[0], pool_stride_hw[1]))
+
+    if (pool_reduce_outch > 0):
+        pool_out_cnt = pool_reduce_outch
+    else:
+        pool_out_cnt = input_size
+
+    outputs = []
+
+    with tf.name_scope(name):
+        if o1x1 > 0:
+            l = conv(input_layer, input_size, o1x1, 1, 1, 1, 1, padding='SAME', name='in1_conv1x1')
+            outputs.append(l)
+
+        if o3x3 > 0:
+            l = conv(input_layer, input_size, o3x3r, 1, 1, 1, 1, padding='SAME', name='in2_conv1x1')
+            l = conv(l, o3x3r, o3x3, 3, 3, conv_stride_hw[0], conv_stride_hw[1], padding='SAME', name='in2_conv3x3')
+            outputs.append(l)
+
+        if o5x5 > 0:
+            l = conv(input_layer, input_size, o5x5r, 1, 1, 1, 1, padding='SAME', name='in3_conv1x1')
+            l = conv(l, o5x5r, o5x5, 5, 5, conv_stride_hw[0], conv_stride_hw[1], padding='SAME', name='in3_conv5x5')
+            outputs.append(l)
+
+        if pooling != None:
+            # Either max pooling or l2 pooling is used in pooling layer.
+            '''
+            if pooling == 'max':
+                pool = maxpool(input_layer, pool_filter_size, pool_filter_size, pool_stride_hw[0], pool_stride_hw[1], padding='SAME', name='maxpool')
+            else:
+                pool = l2pool(input_layer, pool_filter_size, pool_filter_size, pool_stride_hw[0], pool_stride_hw[1], padding='SAME', name='l2pool')
+            '''
+            pool = maxpool(input_layer, pool_filter_size, pool_filter_size, pool_stride_hw[0], pool_stride_hw[1],
+                           padding='SAME', name='maxpool')
+
+            if pool_reduce_outch > 0:
+                poolconv = conv(pool, input_size, pool_reduce_outch, 1, 1, 1, 1, padding='SAME', name='in4_conv1x1')
+            else:
+                poolconv = pool
+
+            outputs.append(poolconv)
+
+        # if debug:
+        #     print("outputs : " + str([str(o.shape) for o in outputs]))
+        l = array_ops.concat(outputs, axis=3, name=name)
+        if debug:
+            print(name + " output : " + str(l.shape))
+        return l
+
+
+def nn2(input, inch):
+    """Make NN2 model
+
+    Args:
+        input: input layer
+        inch: number of channels in input layer.
+
+    Return:
+        nn2 model
+    """
+
+    global model_debug
+    debug = model_debug
+    print("nn2 input:", input.shape)
+    l = input
+
+    ################################################
+    # temp code for MNIST dataset resize
+    ################################################
+    l = tf.image.grayscale_to_rgb(l)
+    l = resize(l, (224, 224))  # resize
+    l = tf.cast(l > 0.5, dtype=tf.float32)
+    ################################################
+
+    l = conv(l, inch, 64, 7, 7, 2, 2, padding='SAME', name='nn_conv1')
+    if debug:
+        print('conv1' + " output : ", str(l.shape))
+    l = maxpool(l, 3, 3, 2, 2, padding='SAME', name='nn_maxpool1')
+    if debug:
+        print('maxpool1' + " output : ", str(l.shape))
+
+    l = inception(l, 64, (1, 1), 0, 64, 192, 0, 0, None, 0, (0, 0), 0, name="nn_convolution_2")
+    l = maxpool(l, 3, 3, 2, 2, 'SAME', "nn_maxpool2")
+    if debug:
+        print('maxpool2' + " output : ", str(l.shape))
+    l = inception(l, 256, (1, 1), 64, 96, 128, 16, 32, 'max', 3, (1, 1), 32, name="inception_3a")
+    l = inception(l, 320, (1, 1), 64, 96, 128, 32, 64, 'l2', 3, (1, 1), 64, name="inception_3b")
+    l = inception(l, 640, (2, 2), 0, 128, 256, 32, 64, 'max', 3, (2, 2), 0, name="inception_3c")
+
+    l = inception(l, 640, (1, 1), 256, 96, 192, 32, 64, 'l2', 3, (1, 1), 128, name="inception_4a")
+    l = inception(l, 640, (1, 1), 224, 112, 224, 32, 64, 'l2', 3, (1, 1), 128, name="inception_4b")
+    l = inception(l, 640, (1, 1), 192, 128, 256, 32, 64, 'l2', 3, (1, 1), 128, name="inception_4c")
+    l = inception(l, 640, (1, 1), 160, 144, 288, 32, 64, 'l2', 3, (1, 1), 128, name="inception_4d")
+    l = inception(l, 640, (2, 2), 0, 160, 256, 64, 128, 'l2', 3, (2, 2), 0, name="inception_4e")
+
+    l = inception(l, 1024, (1, 1), 384, 192, 384, 48, 128, 'l2', 3, (1, 1), 128, name="inception_5a")
+    l = inception(l, 1024, (1, 1), 384, 192, 384, 48, 128, 'max', 3, (1, 1), 128, name="inception_5b")
+
+    l = avgpool(l, 7, 7, 1, 1, 'VALID', 'nn_avg_pooling')
+
+    l = flatten(l, "nn_to_fc")
+    if debug:
+        print("flatten" + " output : ", str(l.shape))
+
+    l = tf.layers.dense(l, 128, activation=None)
+
+    ################################################
+    # temp code for MNIST
+    ################################################
+    l = tf.layers.dense(l, 4, activation=None)
+    ################################################
+
+    l = tf.math.l2_normalize(l, axis=1, epsilon=1e-10, name='final_embeddings')
+
+    print("model final output : ", str(l.shape))
+
+    return l
+
+# img = tf.placeholder(tf.float32, [None, 28, 28, 1], name='img')
+# ret = nn2(img, 3)
+# print(ret.shape)
