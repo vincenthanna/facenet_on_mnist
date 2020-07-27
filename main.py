@@ -2,17 +2,22 @@ import zipfile
 import random
 
 import tensorflow as tf
-
 import pandas as pd
 
 import numpy as np
 import matplotlib.patheffects as PathEffects
 import seaborn as sns
 
+from model import nn2
+import argparse
+
 from tools import *
-from model.simple_nn import *
+from model.nn2 import *
+from model.triplet import *
 
 from sklearn.manifold import TSNE
+
+tsne = TSNE()
 
 tf.reset_default_graph()
 
@@ -21,7 +26,21 @@ class FLAGS:
         self.num_category = 10
 
 
+logdir="logs/fit/"
+
+
 gflags = FLAGS()
+
+
+# make dataset
+#############################################################
+
+
+
+#############################################################
+
+
+
 
 # Placeholders for inserting data
 ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
@@ -30,80 +49,65 @@ lr = tf.Variable(0.001)
 alpha = tf.Variable(0.2)
 
 # make models
-m_embeddings = embedImages(ph_images)
-loss = make_loss_model(ph_images, m_embeddings, alpha)
+m_embeddings = nn2(ph_images, 3) # embedding model for test/use
+loss = make_loss_model(ph_images, m_embeddings)
 optimizer = tf.train.AdamOptimizer(learning_rate=lr)
 train_step = optimizer.minimize(loss=loss)
 
+run_test = False
+
+batch_size_per_cat = 4
+num_batch = int(len(train_set[0]) / batch_size_per_cat)
+batch_size = batch_size_per_cat * num_category
+print("num_batch =", num_batch, " batch_size=", batch_size)
+
+epochs = 1
+
+#def train(df=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch)
 def train(df, batch_size_per_cat, num_category, epochs, num_batch):
-    """train model
-
-    Args:
-
-    Returns:
-
-    Raises:
-        None
-    """    
-
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
 
+        summary_writer = tf.summary.FileWriter(logdir)
+        summary_writer.add_graph(sess.graph)
+        writer_op = tf.summary.merge_all()
+
         for epoch in range(epochs):
-            print("Epoch", epoch)
+
             for batch in range(num_batch):
 
                 images, labels = get_batch(df, batch_size_per_cat, num_category)
 
                 feed_dict = {ph_images: images, ph_labels: labels}
                 embeddings = sess.run([m_embeddings], feed_dict)
-                #print("len(embeddings)=", len(embeddings))
                 if type(embeddings) == list:
                     embeddings = embeddings[0]
 
-                select_training_triplets = select_training_triplets_ver2                    
+                a, p, n = select_training_triplets(embeddings, images, labels)
 
-                a,p,n = select_training_triplets(embeddings, images, labels)
+                if len(a) > 0:
+                    triplet_images = np.vstack([a, p, n])
+                    # print("triplet_images.shape", triplet_images.shape)
 
-                triplet_images = np.vstack([a,p,n])
-                #print("triplet_images.shape", triplet_images.shape)
+                    feed_dict = {ph_images: triplet_images}
 
-                feed_dict = {ph_images: triplet_images}
+                    # print("sess.run() : ", type(train_step), type(loss), type(optimizer._lr), type(writer_op) )
+                    _, loss_val, current_lr = sess.run([train_step, loss, optimizer._lr], feed_dict=feed_dict)
+                    # summary_writer.add_summary(summary, epoch * num_batch + batch)
+                    # print("loss =", loss_val, "lr =", current_lr)
 
-                _, loss_val, current_lr = sess.run([train_step, loss, optimizer._lr], feed_dict=feed_dict)
-                #print("loss =", loss_val, "lr =", current_lr)
-
-        # Training is finished, get a batch from training and validation
-        # data to visualize the results
-        x, y = get_batch(df, 32, num_category)
-
-        # Embed the images using the network
-        embeds = sess.run(m_embeddings, feed_dict={ph_images: x, ph_labels:y})        
-
-        if False:
-            a,p,n = select_training_triplets(embeds, x, y)
-            samplelen = 20
-            fig, ax = plt.subplots(3, samplelen, figsize=(32,12))
-
-            def __show_triplets(ax, row, imgarr, samplelen=samplelen):
-                for i in range(samplelen):
-                    ax[row][i].imshow(imgarr[i].reshape(28, 28), cmap=plt.cm.binary)
-                    ax[row][i].tick_params(axis='both', which='both', bottom=False, top=False, labelbottom=False, right=False, left=False, labelleft=False)
-
-            __show_triplets(ax, 0, a)
-            __show_triplets(ax, 1, p)
-            __show_triplets(ax, 2, n)
-            plt.show()
-
-            tsne = TSNE()
-            tsne_train = tsne.fit_transform(embeds)
-            scatter(tsne_train, y, "Results on Data")            
-
-        # save model as file
         saver = tf.train.Saver()
         saver.save(sess, './face_model')
 
-    return None
+        # Training is finished, get a batch from training and validation
+        # data to visualize the results
+        x_train, y_train = get_batch(df, 32)
+
+        # Embed the images using the network
+        embeds = sess.run(m_embeddings, feed_dict={ph_images: x_train, ph_labels: y_train})
+        transformed_output = tsne.fit_transform(embeds)
+        scatter(transformed_output, y_train, "Results on Training Data")
+    return embeds
 
 
 def build_facedb(dataset, model_embedding, num_category):
@@ -167,26 +171,54 @@ def test(x, y, threshold, facedb):
         acc = ((rets == y).mean())
         print("Valid accuracy : ", acc)
 
-
-        # show mis-predicted images
-        print("")
-        print("wrong predicted images:")
         inaccurace_indices = np.nonzero(rets != y)
         inacc_cnt = inaccurace_indices[0].shape[0]
-        inacc_cnt = min(inacc_cnt, 20)
-        fig, ax = plt.subplots(1, inacc_cnt, figsize=(2 * inacc_cnt, 4)) 
+
+        print("")
+        print("correct/incorrect predicted images:")
+        accurace_indices = np.nonzero(rets == y)
+        acc_cnt = accurace_indices[0].shape[0]
+        show_max = 10
+        fig, ax = plt.subplots(2, show_max, figsize=(2 * show_max, 4))
+        # show correctly predicted images
+        for i, idx in enumerate(accurace_indices[0]):
+            ax[0][i].imshow(x[idx].reshape(28, 28), cmap=plt.cm.binary)
+            ax[0][i].set_title(str(rets[idx]))
+            ax[0][i].tick_params(axis='both', which='both', bottom=False, top=False, labelbottom=False, right=False,
+                                 left=False, labelleft=False)
+            if i >= show_max - 1:
+                break
+
+        # show mispredicted images
         for i, idx in enumerate(inaccurace_indices[0]):
-            if i < inacc_cnt:
-                ax[i].imshow(x[idx].reshape(28, 28), cmap=plt.cm.binary)
-                ax[i].set_title(str(rets[idx]))
-                ax[i].tick_params(axis='both', which='both', bottom=False, top=False, labelbottom=False, right=False, left=False, labelleft=False)
-            else:
+            ax[1][i].imshow(x[idx].reshape(28, 28), cmap=plt.cm.binary)
+            ax[1][i].set_title(str(rets[idx]))
+            ax[1][i].tick_params(axis='both', which='both', bottom=False, top=False, labelbottom=False, right=False,
+                                 left=False, labelleft=False)
+            if i >= show_max - 1:
                 break
 
         plt.show()
 
-def run():
+
+
+def parse_arguments(argv):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('lr', type=float,
+                        help='Learning rate for training.', default=0.001)
+    parser.add_argument('epochs', type=int,
+                        help='Number of epochs on training', default=2)
+    parser.add_argument("batch_per_category", type=int,
+                        help='Number of data per category within single batch', default=4)
+
+    return parser.parse_args(argv)
+
+
+def run(args):
     global gflags
+
+    epochs = args.epochs
+    print(args.epochs, args.lr, args.batch_per_category)
 
     sns.set_style('darkgrid')
     sns.set_palette('muted')
@@ -195,32 +227,16 @@ def run():
     zp = zipfile.ZipFile("mnist.zip")
     zp.extractall('./')
 
-    df_train = pd.read_csv("./train.csv")
-    df_test = pd.read_csv("./test.csv")
-
-    all_labels, all_images = sep_mnist_csv(df_train)
-
-    train_images, valid_images, train_labels, valid_labels = train_test_split(all_images, all_labels, test_size=0.20)
-
-    print(train_images.shape, train_labels.shape)
-    print(valid_images.shape, valid_labels.shape)
-
-    num_category = gflags.num_category = 10
-    batch_size_per_cat = gflags.batch_size_per_cat = 4
-
-    train_set = reorganizeMNIST(train_images, train_labels.reshape(-1))
-    valid_set = reorganizeMNIST(valid_images, valid_labels.reshape(-1))
-
-    #test_batch(train_set, num_category)
+    train_set, valid_set = build_mnist_dataset("./mnist_train.csv")
 
     num_batch = gflags.num_batch = int(len(train_set[0]) / batch_size_per_cat)
     gflags.batch_size = batch_size_per_cat * num_category 
     print("num_batch =", gflags.num_batch, " batch_size=", gflags.batch_size)
 
-    epochs = 10
+
     
     # Turn on if you want to check code is valid(quick one-time run)
-    if False:
+    if True:
         epochs = 1
         num_batch = gflags.num_batch = 2
 
@@ -233,8 +249,8 @@ def run():
 
     # test with valid set.
     x_val, y_val = get_batch(valid_set, 32, gflags.num_category)
-    test(x_val, y_val, threshold=0.1, facedb=facedb)    
+    test(x_val, y_val, threshold=0.1, facedb=facedb)
 
 if __name__ == '__main__':
-    run()
+    run(parse_arguments(sys.argv[1:]))
 

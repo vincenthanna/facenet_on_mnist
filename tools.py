@@ -6,7 +6,7 @@ import pandas as pd
 import random
 import numpy as np
 
-from np.random import default_rng
+from numpy.random import default_rng
 rng = default_rng()
 
 from sklearn.model_selection import train_test_split
@@ -18,6 +18,30 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 
 num_category = 10
+
+
+def build_mnist_dataset(train_file_path, test_split=0.1):
+    """ Transform MNIST dataset into dictionary shape.
+     {number : list of images}
+
+    Args:
+        train_file_path: path to 'train.csv' file
+        test_split: train_test_split ratio
+
+    Returns:
+        dictionary of train and valid
+    """
+    df = pd.read_csv(train_file_path)
+
+    all_labels, all_images = sep_mnist_csv(df)
+
+    train_images, valid_images, train_labels, valid_labels = train_test_split(all_images, all_labels, test_size=test_split)
+
+    train_set = reorganizeMNIST(train_images, train_labels.reshape(-1))
+    valid_set = reorganizeMNIST(valid_images, valid_labels.reshape(-1))
+
+    return train_set, valid_set
+
 
 def get_batch(dataset, num_samples, categorycnt=num_category):
     """Sample num_samples random images from each category of the MNIST dataset,
@@ -57,19 +81,6 @@ def get_batch(dataset, num_samples, categorycnt=num_category):
     batch = batch.astype(np.float32) / 255.0
 
     return batch, labels
-
-
-# def test_batch():
-#     """check get_batch function works correctly"""
-#     images, labels = get_batch(train_set, 20, num_category)
-#     fig, ax = plt.subplots(2, 10, figsize=(24, 8))
-#     for i in range(2):
-#         for j in range(10):
-#             ax[i][j].imshow(images[2 * i + j].reshape(28, 28), cmap=plt.cm.binary)
-#             ax[i][j].set_title(str(labels[2 * i + j]))
-#             ax[i][j].tick_params(axis='both', which='both', bottom=False, top=False, labelbottom=False, right=False,
-#                                  left=False, labelleft=False)
-#     plt.show()
 
 
 def sep_mnist_csv(df):
@@ -151,90 +162,3 @@ def scatter(x, labels, subtitle=None):
         plt.suptitle(subtitle)
 
     plt.show()
-
-
-def select_training_triplets(embeddings, images, labels):
-    """make triplet arrays from input
-
-    Args:
-        embeddings : embeddings of images 'images'
-        images : numpy array of images
-        labels : labels array
-
-    Return:
-        Arrays of triplet elements
-            array of anchor images
-            array of selected positive images
-            array of selected negative images
-    """
-
-    def get_dist(emb1, emb2):
-        x = np.sqrt(np.square(np.subtract(emb1, emb2)))
-        return np.sum(x, 0)
-
-    ancarr = []
-    posarr = []
-    negarr = []
-
-    do_shuffle = True
-
-    for aidx in range(len(labels)):
-        current_label = labels[aidx]
-
-        # anchor: current image
-        anchor = images[aidx]
-
-        # positive:
-        selected_positive = None
-        ap_dist = 0
-        if do_shuffle:
-            pos_indices = sklearn.utils.shuffle([i for i in range(len(labels))])
-        else:
-            pos_indices = [i for i in range(len(labels))]
-        for i in pos_indices:
-            if i != aidx and current_label == labels[i]:
-                # consider all other images in the same category as positive.
-                positive = images[i]
-                embedding_positive = embeddings[i]
-                ap_dist = get_dist(embeddings[aidx], embeddings[i])
-                # if ap_dist == 0.0:
-                #     print("ap_dist is 0 :", aidx, embeddings[aidx], i, embeddings[i])
-
-                # get negative(semi-hard)
-                an_dist = sys.maxsize
-                negative = None
-
-                neg_indices = [i for i in range(len(labels))]
-                if do_shuffle:
-                    neg_indices = sklearn.utils.shuffle([i for i in range(len(labels))])
-                for ni in neg_indices:
-                    if current_label != labels[ni]:
-                        if negative is None:
-                            negative = images[ni]
-                            an_dist = get_dist(embedding_positive, embeddings[ni])
-                        dist = get_dist(embedding_positive, embeddings[ni])
-                        """select negative that meet conditions below
-                            - dist(a, n) is smallest
-                            - dist(a, n) > dist(a, p)
-                        """
-
-                        # if dist > ap_dist and dist < an_dist:
-                        if dist > ap_dist:
-                            an_dist = dist
-                            negative = images[ni]
-
-                if ap_dist < an_dist:
-                    # print("ap_dist=", ap_dist, "an_dist=", an_dist)
-                    ancarr.append(anchor)
-                    posarr.append(positive)
-                    negarr.append(negative)
-    if do_shuffle:
-        ancarr, posarr, negarr = sklearn.utils.shuffle(ancarr, posarr, negarr)
-
-    # print("selected triples : ", len(ancarr))
-
-    ancarr = np.array(ancarr)
-    posarr = np.array(posarr)
-    negarr = np.array(negarr)
-
-    return ancarr, posarr, negarr
