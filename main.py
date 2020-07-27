@@ -41,7 +41,7 @@ gflags = FLAGS()
 
 
 
-
+'''
 # Placeholders for inserting data
 ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
 ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
@@ -53,18 +53,21 @@ m_embeddings = nn2(ph_images, 3) # embedding model for test/use
 loss = make_loss_model(ph_images, m_embeddings)
 optimizer = tf.train.AdamOptimizer(learning_rate=lr)
 train_step = optimizer.minimize(loss=loss)
+'''
 
-run_test = False
 
-batch_size_per_cat = 4
-num_batch = int(len(train_set[0]) / batch_size_per_cat)
-batch_size = batch_size_per_cat * num_category
-print("num_batch =", num_batch, " batch_size=", batch_size)
 
 epochs = 1
 
 #def train(df=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch)
-def train(df, batch_size_per_cat, num_category, epochs, num_batch):
+def train(df, batch_size_per_cat, num_category, epochs, num_batch, learning_rate):
+    ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
+    ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
+    m_embeddings = nn2(ph_images, 3)  # embedding model for test/use
+    loss = make_loss_model(ph_images, m_embeddings)
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    train_step = optimizer.minimize(loss=loss)
+
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
 
@@ -113,6 +116,8 @@ def train(df, batch_size_per_cat, num_category, epochs, num_batch):
 def build_facedb(dataset, model_embedding, num_category):
     global gflags
     sample_cnt_by_category = 100
+    ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
+    ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
     with tf.Session() as sess:
         # load model
         saver = tf.train.import_meta_graph('face_model.meta')
@@ -141,7 +146,8 @@ def build_facedb(dataset, model_embedding, num_category):
         return facedb
 
 
-def test(x, y, threshold, facedb):
+def test(x, y, threshold, facedb, m_embeddings):
+    ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
     with tf.Session() as sess:
 
         # load model
@@ -216,6 +222,10 @@ def parse_arguments(argv):
 
 def run(args):
     global gflags
+
+    print(args)
+
+    return
 
     epochs = args.epochs
     print(args.epochs, args.lr, args.batch_per_category)
