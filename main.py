@@ -59,7 +59,6 @@ train_step = optimizer.minimize(loss=loss)
 
 epochs = 1
 
-#def train(df=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch)
 def train(df, batch_size_per_cat, num_category, epochs, num_batch, learning_rate):
     ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
     ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
@@ -225,9 +224,9 @@ def run(args):
 
     print(args)
 
-    return
-
     epochs = args.epochs
+    batch_size_per_cat = args.batch_per_category
+    lr = args.lr
     print(args.epochs, args.lr, args.batch_per_category)
 
     sns.set_style('darkgrid')
@@ -240,9 +239,19 @@ def run(args):
     train_set, valid_set = build_mnist_dataset("./mnist_train.csv")
 
     num_batch = gflags.num_batch = int(len(train_set[0]) / batch_size_per_cat)
-    gflags.batch_size = batch_size_per_cat * num_category 
+    gflags.batch_size = batch_size_per_cat * num_category
     print("num_batch =", gflags.num_batch, " batch_size=", gflags.batch_size)
 
+    # variables and parameters
+    learning_rate = tf.Variable(lr)
+    ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
+    ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
+
+    # models for embedding, training
+    embedding_model = nn2(ph_images, 3)  # embedding model for test/use
+    loss = make_loss_model(ph_images, embedding_model)
+    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    train_step = optimizer.minimize(loss=loss)
 
     
     # Turn on if you want to check code is valid(quick one-time run)
@@ -254,7 +263,7 @@ def run(args):
     train(df=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch)
 
     # make embeddings for each labels
-    facedb = build_facedb(train_set, m_embeddings, num_category)
+    facedb = build_facedb(train_set, embedding_model, num_category)
     print(facedb)
 
     # test with valid set.
