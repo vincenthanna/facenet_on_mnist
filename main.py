@@ -59,13 +59,8 @@ train_step = optimizer.minimize(loss=loss)
 
 epochs = 1
 
-def train(df, batch_size_per_cat, num_category, epochs, num_batch, learning_rate):
-    ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
-    ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
-    m_embeddings = nn2(ph_images, 3)  # embedding model for test/use
-    loss = make_loss_model(ph_images, m_embeddings)
-    optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
-    train_step = optimizer.minimize(loss=loss)
+def train(train_dataset, batch_size_per_cat, num_category, epochs, num_batch, learning_rate, \
+          ph_images, ph_labels, m_embeddings, m_loss, m_train, optimizer, logdir="logs/fit"):
 
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
@@ -78,7 +73,7 @@ def train(df, batch_size_per_cat, num_category, epochs, num_batch, learning_rate
 
             for batch in range(num_batch):
 
-                images, labels = get_batch(df, batch_size_per_cat, num_category)
+                images, labels = get_batch(train_dataset, batch_size_per_cat, num_category)
 
                 feed_dict = {ph_images: images, ph_labels: labels}
                 embeddings = sess.run([m_embeddings], feed_dict)
@@ -94,7 +89,7 @@ def train(df, batch_size_per_cat, num_category, epochs, num_batch, learning_rate
                     feed_dict = {ph_images: triplet_images}
 
                     # print("sess.run() : ", type(train_step), type(loss), type(optimizer._lr), type(writer_op) )
-                    _, loss_val, current_lr = sess.run([train_step, loss, optimizer._lr], feed_dict=feed_dict)
+                    _, loss_val, current_lr = sess.run([m_train, m_loss, optimizer._lr], feed_dict=feed_dict)
                     # summary_writer.add_summary(summary, epoch * num_batch + batch)
                     # print("loss =", loss_val, "lr =", current_lr)
 
@@ -103,7 +98,7 @@ def train(df, batch_size_per_cat, num_category, epochs, num_batch, learning_rate
 
         # Training is finished, get a batch from training and validation
         # data to visualize the results
-        x_train, y_train = get_batch(df, 32)
+        x_train, y_train = get_batch(train_dataset, 32)
 
         # Embed the images using the network
         embeds = sess.run(m_embeddings, feed_dict={ph_images: x_train, ph_labels: y_train})
@@ -112,11 +107,8 @@ def train(df, batch_size_per_cat, num_category, epochs, num_batch, learning_rate
     return embeds
 
 
-def build_facedb(dataset, model_embedding, num_category):
-    global gflags
+def build_facedb(dataset, ph_images, ph_labels, m_embedding, num_category):
     sample_cnt_by_category = 100
-    ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
-    ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
     with tf.Session() as sess:
         # load model
         saver = tf.train.import_meta_graph('face_model.meta')
@@ -124,10 +116,10 @@ def build_facedb(dataset, model_embedding, num_category):
 
         # Training is finished, get a batch from training and validation
         # data to visualize the results
-        x, y = get_batch(dataset, sample_cnt_by_category, gflags.num_category)
+        x, y = get_batch(dataset, sample_cnt_by_category, num_category)
 
         # Embed the images using the network
-        embeds = sess.run(model_embedding, feed_dict={ph_images: x, ph_labels:y})        
+        embeds = sess.run(m_embedding, feed_dict={ph_images: x, ph_labels:y})
 
         embed_dict = {new_list : [] for new_list in range(num_category)}
 
@@ -145,7 +137,7 @@ def build_facedb(dataset, model_embedding, num_category):
         return facedb
 
 
-def test(x, y, threshold, facedb, m_embeddings):
+def test(x, y, threshold, facedb, ph_images, m_embeddings):
     ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
     with tf.Session() as sess:
 
