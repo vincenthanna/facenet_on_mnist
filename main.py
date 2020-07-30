@@ -26,38 +26,7 @@ class FLAGS:
         self.num_category = 10
 
 
-logdir="logs/fit/"
-
-
 gflags = FLAGS()
-
-
-# make dataset
-#############################################################
-
-
-
-#############################################################
-
-
-
-'''
-# Placeholders for inserting data
-ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
-ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
-lr = tf.Variable(0.001)
-alpha = tf.Variable(0.2)
-
-# make models
-m_embeddings = nn2(ph_images, 3) # embedding model for test/use
-loss = make_loss_model(ph_images, m_embeddings)
-optimizer = tf.train.AdamOptimizer(learning_rate=lr)
-train_step = optimizer.minimize(loss=loss)
-'''
-
-
-
-epochs = 1
 
 def train(train_dataset, batch_size_per_cat, num_category, epochs, num_batch, learning_rate, \
           ph_images, ph_labels, m_embeddings, m_loss, m_train, optimizer, logdir="logs/fit"):
@@ -104,7 +73,8 @@ def train(train_dataset, batch_size_per_cat, num_category, epochs, num_batch, le
         embeds = sess.run(m_embeddings, feed_dict={ph_images: x_train, ph_labels: y_train})
         transformed_output = tsne.fit_transform(embeds)
         scatter(transformed_output, y_train, "Results on Training Data")
-    return embeds
+
+    return
 
 
 def build_facedb(dataset, ph_images, ph_labels, m_embedding, num_category):
@@ -201,12 +171,12 @@ def test(x, y, threshold, facedb, ph_images, m_embeddings):
 
 def parse_arguments(argv):
     parser = argparse.ArgumentParser()
-    parser.add_argument('lr', type=float,
-                        help='Learning rate for training.', default=0.001)
-    parser.add_argument('epochs', type=int,
-                        help='Number of epochs on training', default=2)
-    parser.add_argument("batch_per_category", type=int,
-                        help='Number of data per category within single batch', default=4)
+    parser.add_argument('--lr', type=float,
+                        help='Learning rate for training.', default=0.001, required=False)
+    parser.add_argument('--epochs', type=int,
+                        help='Number of epochs on training', default=1, required=False)
+    parser.add_argument("--batch_per_cat", type=int,
+                        help='Number of data per category within single batch', default=4, required=False)
 
     return parser.parse_args(argv)
 
@@ -214,12 +184,9 @@ def parse_arguments(argv):
 def run(args):
     global gflags
 
-    print(args)
-
     epochs = args.epochs
-    batch_size_per_cat = args.batch_per_category
+    batch_size_per_cat = args.batch_per_cat
     lr = args.lr
-    print(args.epochs, args.lr, args.batch_per_category)
 
     sns.set_style('darkgrid')
     sns.set_palette('muted')
@@ -230,14 +197,23 @@ def run(args):
 
     train_set, valid_set = build_mnist_dataset("./mnist_train.csv")
 
-    num_batch = gflags.num_batch = int(len(train_set[0]) / batch_size_per_cat)
-    gflags.batch_size = batch_size_per_cat * num_category
-    print("num_batch =", gflags.num_batch, " batch_size=", gflags.batch_size)
+    num_batch = int(len(train_set[0]) / batch_size_per_cat)
+    batch_size = batch_size_per_cat * num_category
+
+    print("Parameters : ")
+    print("-----------------------------------------")
+    print("Epochs                :", epochs)
+    print("Learning Rate         :", lr)
+    print("Batch size / category :", batch_size_per_cat)
+    print("Number of batch       :", num_batch)
+    print("Batch size            :", batch_size)
+    print("-----------------------------------------")
 
     # variables and parameters
     learning_rate = tf.Variable(lr)
     ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
     ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
+    logdir = "logs/fit/"
 
     # models for embedding, training
     embedding_model = nn2(ph_images, 3)  # embedding model for test/use
@@ -251,16 +227,21 @@ def run(args):
         epochs = 1
         num_batch = gflags.num_batch = 2
 
+
     # train model and make embeddings with it
-    train(df=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch)
+    train(train_dataset=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch, learning_rate=learning_rate,\
+          ph_images=ph_images, ph_labels=ph_labels, m_embeddings=embedding_model, m_loss=loss, m_train=train_step, optimizer=optimizer, logdir=logdir)
 
     # make embeddings for each labels
-    facedb = build_facedb(train_set, embedding_model, num_category)
+    facedb = build_facedb(train_set, ph_images, ph_labels, embedding_model, num_category)
     print(facedb)
 
     # test with valid set.
-    x_val, y_val = get_batch(valid_set, 32, gflags.num_category)
-    test(x_val, y_val, threshold=0.1, facedb=facedb)
+    x_val, y_val = get_batch(valid_set, 32, num_category)
+    test(x_val, y_val, threshold=0.1, facedb=facedb, ph_images=ph_images, m_embeddings=embedding_model)
+
+    return
+
 
 if __name__ == '__main__':
     run(parse_arguments(sys.argv[1:]))
