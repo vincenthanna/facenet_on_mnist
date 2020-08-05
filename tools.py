@@ -17,8 +17,6 @@ import seaborn as sns
 
 from sklearn.manifold import TSNE
 
-num_category = 10
-
 
 def build_mnist_dataset(train_file_path, test_split=0.1):
     """ Transform MNIST dataset into dictionary shape.
@@ -43,7 +41,7 @@ def build_mnist_dataset(train_file_path, test_split=0.1):
     return train_set, valid_set
 
 
-def get_batch(dataset, num_samples, categorycnt=num_category):
+def get_batch(dataset, num_samples, categorycnt, num_category_in_batch=-1):
     """Sample num_samples random images from each category of the MNIST dataset,
     returning the data along with its labels
 
@@ -51,6 +49,7 @@ def get_batch(dataset, num_samples, categorycnt=num_category):
         dataset: dictionary of number and list of images
         num_samples: number of sample images each category(number)
         categorycnt: number of category(in MNIST, it's 10(0~9))
+        num_category_in_batch : number of category in batch
 
     Returns:
         tuple (images, labels)
@@ -58,8 +57,15 @@ def get_batch(dataset, num_samples, categorycnt=num_category):
     batch = []
     labels = []
 
-    for l in range(categorycnt):
-        # indices = np.random.randint(0, len(dataset[l]), num_samples)
+    cats_in_batch = categorycnt
+    if num_category_in_batch > 0:
+        cats_in_batch = num_category_in_batch
+
+    cats = [i for i in range(categorycnt)]
+    if num_category_in_batch > 0:
+        cats = rng.choice(categorycnt, num_category_in_batch)
+
+    for l in cats:
         indices = rng.choice(len(dataset[l]), size=num_samples, replace=False)
         indices = np.array(indices)
 
@@ -67,7 +73,7 @@ def get_batch(dataset, num_samples, categorycnt=num_category):
         labels += [l] * num_samples
 
     # image width/height
-    batch = np.array(batch).reshape(categorycnt * num_samples, 28, 28, 1)
+    batch = np.array(batch).reshape(cats_in_batch * num_samples, 28, 28, 1)
     labels = np.array(labels)
 
     # Shuffling labels and batch the same way

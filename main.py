@@ -17,6 +17,22 @@ from model.triplet import *
 
 from sklearn.manifold import TSNE
 
+import psutil
+import humanize
+import os
+import GPUtil as GPU
+
+
+GPUs = GPU.getGPUs()
+# XXX: only one GPU on Colab and isn’t guaranteed
+gpu = GPUs[0]
+def printm():
+    process = psutil.Process(os.getpid())
+    print("Gen RAM Free: " + humanize.naturalsize( psutil.virtual_memory().available ), " | Proc size: " + humanize.naturalsize( process.memory_info().rss))
+    print("GPU RAM Free: {0:.0f}MB | Used: {1:.0f}MB | Util {2:3.0f}% | Total {3:.0f}MB".format(gpu.memoryFree, gpu.memoryUsed, gpu.memoryUtil*100, gpu.memoryTotal))
+printm()
+
+
 tsne = TSNE()
 
 tf.reset_default_graph()
@@ -28,8 +44,9 @@ class FLAGS:
 
 gflags = FLAGS()
 
-def train(train_dataset, batch_size_per_cat, num_category, epochs, num_batch, learning_rate, \
-          ph_images, ph_labels, m_embeddings, m_loss, m_train, optimizer, logdir="logs/fit"):
+
+def train(train_dataset, batch_size_per_cat, num_category, cats_in_batch, triplet_pack_size, epochs, num_batch,
+          learning_rate, ph_images, ph_labels, m_embeddings, m_loss, m_train, optimizer, logdir="logs/fit"):
 
     with tf.Session() as sess:
         tf.global_variables_initializer().run()
@@ -38,11 +55,16 @@ def train(train_dataset, batch_size_per_cat, num_category, epochs, num_batch, le
         summary_writer.add_graph(sess.graph)
         writer_op = tf.summary.merge_all()
 
+        print("Start training...")
+        print(epochs, "epochs, ", num_batch, "batchs.")
+
         for epoch in range(epochs):
 
             for batch in range(num_batch):
+                print(">>> Epoch", epoch, "Batch", batch)
 
-                images, labels = get_batch(train_dataset, batch_size_per_cat, num_category)
+                images, labels = get_batch(train_dataset, batch_size_per_cat, num_category,
+                                           num_category_in_batch=cats_in_batch)
 
                 feed_dict = {ph_images: images, ph_labels: labels}
                 embeddings = sess.run([m_embeddings], feed_dict)
@@ -50,24 +72,29 @@ def train(train_dataset, batch_size_per_cat, num_category, epochs, num_batch, le
                     embeddings = embeddings[0]
 
                 a, p, n = select_training_triplets(embeddings, images, labels)
-
                 if len(a) > 0:
-                    triplet_images = np.vstack([a, p, n])
-                    # print("triplet_images.shape", triplet_images.shape)
+                    for i in range(int(a.shape[0] / triplet_pack_size) + 1):
+                        begin = i * triplet_pack_size
+                        end = (i + 1) * triplet_pack_size
+                        if end >= a.shape[0]:
+                            end = a.shape[0]
+                        pa = a[begin:end]
+                        pp = p[begin:end]
+                        pn = n[begin:end]
+                        triplet_images = np.vstack([pa, pp, pn])
+                        feed_dict = {ph_images: triplet_images}
 
-                    feed_dict = {ph_images: triplet_images}
-
-                    # print("sess.run() : ", type(train_step), type(loss), type(optimizer._lr), type(writer_op) )
-                    _, loss_val, current_lr = sess.run([m_train, m_loss, optimizer._lr], feed_dict=feed_dict)
-                    # summary_writer.add_summary(summary, epoch * num_batch + batch)
-                    # print("loss =", loss_val, "lr =", current_lr)
+                        # print("sess.run() : ", type(train_step), type(loss), type(optimizer._lr), type(writer_op) )
+                        _, loss_val, current_lr = sess.run([m_train, m_loss, optimizer._lr], feed_dict=feed_dict)
+                        # summary_writer.add_summary(summary, epoch * num_batch + batch)
+                        # print("loss =", loss_val, "lr =", current_lr)
 
         saver = tf.train.Saver()
         saver.save(sess, './face_model')
 
         # Training is finished, get a batch from training and validation
         # data to visualize the results
-        x_train, y_train = get_batch(train_dataset, 32)
+        x_train, y_train = get_batch(train_dataset, 32, num_category)
 
         # Embed the images using the network
         embeds = sess.run(m_embeddings, feed_dict={ph_images: x_train, ph_labels: y_train})
@@ -108,9 +135,7 @@ def build_facedb(dataset, ph_images, ph_labels, m_embedding, num_category):
 
 
 def test(x, y, threshold, facedb, ph_images, m_embeddings):
-    ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
     with tf.Session() as sess:
-
         # load model
         saver = tf.train.import_meta_graph('face_model.meta')
         saver.restore(sess,tf.train.latest_checkpoint('./'))
@@ -176,7 +201,7 @@ def parse_arguments(argv):
     parser.add_argument('--epochs', type=int,
                         help='Number of epochs on training', default=1, required=False)
     parser.add_argument("--batch_per_cat", type=int,
-                        help='Number of data per category within single batch', default=4, required=False)
+                        help='Number of data per category within single batch', default=10, required=False)
 
     return parser.parse_args(argv)
 
@@ -197,8 +222,10 @@ def run(args):
 
     train_set, valid_set = build_mnist_dataset("./mnist_train.csv")
 
+    cats_in_batch = 6
+    num_category = gflags.num_category
     num_batch = int(len(train_set[0]) / batch_size_per_cat)
-    batch_size = batch_size_per_cat * num_category
+    batch_size = batch_size_per_cat * cats_in_batch
 
     print("Parameters : ")
     print("-----------------------------------------")
@@ -207,6 +234,7 @@ def run(args):
     print("Batch size / category :", batch_size_per_cat)
     print("Number of batch       :", num_batch)
     print("Batch size            :", batch_size)
+    print("Categories in batch   :", cats_in_batch)
     print("-----------------------------------------")
 
     # variables and parameters
@@ -214,6 +242,7 @@ def run(args):
     ph_images = tf.placeholder(tf.float32, [None, 28, 28, 1], name='images_ph')
     ph_labels = tf.placeholder(tf.int32, [None], name='labels_ph')
     logdir = "logs/fit/"
+    triplet_pack_size = 50
 
     # models for embedding, training
     embedding_model = nn2(ph_images, 3)  # embedding model for test/use
@@ -221,16 +250,20 @@ def run(args):
     optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
     train_step = optimizer.minimize(loss=loss)
 
-    
+
     # Turn on if you want to check code is valid(quick one-time run)
+    '''
     if True:
         epochs = 1
-        num_batch = gflags.num_batch = 2
+        num_batch = gflags.num_batch = 10
+    '''
 
 
     # train model and make embeddings with it
-    train(train_dataset=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category, epochs=epochs, num_batch=num_batch, learning_rate=learning_rate,\
-          ph_images=ph_images, ph_labels=ph_labels, m_embeddings=embedding_model, m_loss=loss, m_train=train_step, optimizer=optimizer, logdir=logdir)
+    train(train_dataset=train_set, batch_size_per_cat=batch_size_per_cat, num_category=num_category,
+          cats_in_batch=cats_in_batch, triplet_pack_size=triplet_pack_size, epochs=epochs, num_batch=num_batch,
+          learning_rate=learning_rate, ph_images=ph_images, ph_labels=ph_labels, m_embeddings=embedding_model,
+          m_loss=loss, m_train=train_step, optimizer=optimizer, logdir=logdir)
 
     # make embeddings for each labels
     facedb = build_facedb(train_set, ph_images, ph_labels, embedding_model, num_category)
